@@ -1,3 +1,16 @@
+const { getStore } = require('@netlify/blobs');
+
+async function getUserData(chatId) {
+  const store = getStore('user-data');
+  const data = await store.get(String(chatId), { type: 'json' });
+  return data || { defaultRisk: 20, dailyBudget: 60, history: [] };
+}
+
+async function saveUserData(chatId, data) {
+  const store = getStore('user-data');
+  await store.setJSON(String(chatId), data);
+}
+
 exports.handler = async (event) => {
   const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -18,7 +31,6 @@ exports.handler = async (event) => {
     const chatId = cq.message.chat.id;
     const data = cq.data;
 
-    // Dismiss the loading spinner on the button
     await tgPost(TOKEN, 'answerCallbackQuery', { callback_query_id: cq.id });
 
     if (data === 'calc_risk') {
@@ -26,8 +38,9 @@ exports.handler = async (event) => {
         `💰 *Calculate Risk*\n\nSend 3 numbers:\n\n\`risk stop_distance pip_value\`\n\n*Example:* \`20 3.00 0.10\`\n→ Lot size: 6 lots\n\n_Educational only. Not financial advice._`
       );
     } else if (data === 'show_rules') {
+      const userData = await getUserData(chatId);
       await sendMessage(TOKEN, chatId,
-        `🛡️ *$60 Framework*\n\n• $60 daily budget\n• $20 risk per trade\n• 3 trades max\n• 1:2 minimum RR\n• 30min cooldown after loss`
+        `🛡️ *YOUR FRAMEWORK*\n\n• $${userData.dailyBudget} daily budget\n• $${userData.defaultRisk} risk per trade\n• 3 trades max\n• 1:2 minimum RR\n• 30min cooldown after loss\n\nCustomize: /setrisk and /setbudget`
       );
     } else if (data === 'show_journal') {
       await sendMessage(TOKEN, chatId,
@@ -70,22 +83,72 @@ exports.handler = async (event) => {
 
   if (text === '/help') {
     await sendMessage(TOKEN, chatId,
-      `📚 *How to Use*\n\nSend 3 numbers in one message:\n\`risk stop_distance pip_value\`\n\n*Example:*\n\`20 3.00 0.10\`\n\n→ Result: 6 lots\n\n*Commands:*\n/risk — Calculate lot size\n/rules — $60 framework\n/journal — Trade log template\n/streak — Consistency tracker\n/help — This message`
+      `📚 *How to Use*\n\nSend 3 numbers in one message:\n\`risk stop_distance pip_value\`\n\n*Example:*\n\`20 3.00 0.10\`\n\n→ Result: 6 lots\n\n*Commands:*\n/risk — Calculate lot size\n/rules — Your risk framework\n/profile — Your saved settings\n/history — Your last calculations\n/setrisk — Set default risk\n/setbudget — Set daily budget\n/journal — Trade log template\n/streak — Consistency tracker\n/help — This message`
     );
     return { statusCode: 200, body: 'OK' };
   }
 
   if (text === '/rules') {
+    const userData = await getUserData(chatId);
     await sendMessage(TOKEN, chatId,
-      `🛡️ *$60 Framework*\n\n• $60 daily budget\n• $20 risk per trade\n• 3 trades max\n• 1:2 minimum RR\n• 30min cooldown after loss`
+      `🛡️ *YOUR FRAMEWORK*\n\n• $${userData.dailyBudget} daily budget\n• $${userData.defaultRisk} risk per trade\n• 3 trades max\n• 1:2 minimum RR\n• 30min cooldown after loss\n\nCustomize: /setrisk and /setbudget`
     );
     return { statusCode: 200, body: 'OK' };
   }
 
   if (text === '/risk') {
+    const userData = await getUserData(chatId);
     await sendMessage(TOKEN, chatId,
-      `💰 *Calculate Lot Size*\n\nSend 3 numbers:\n\n\`risk stop_distance pip_value\`\n\n*Example:*\n\`20 3.00 0.10\`\n→ Result: 6 lots`
+      `💰 *Calculate Lot Size*\n\nSend 3 numbers:\n\n\`risk stop_distance pip_value\`\n\n*Example:*\n\`${userData.defaultRisk} 3.00 0.10\`\n→ Result: 6 lots`
     );
+    return { statusCode: 200, body: 'OK' };
+  }
+
+  if (text === '/profile') {
+    const userData = await getUserData(chatId);
+    await sendMessage(TOKEN, chatId,
+      `👤 *Your Profile*\n\nDaily Budget: $${userData.dailyBudget}\nDefault Risk: $${userData.defaultRisk}\nCalculations saved: ${userData.history.length}\n\nUpdate with /setrisk or /setbudget`
+    );
+    return { statusCode: 200, body: 'OK' };
+  }
+
+  if (text === '/history') {
+    const userData = await getUserData(chatId);
+    if (userData.history.length === 0) {
+      await sendMessage(TOKEN, chatId, `📋 No history yet.\n\nSend 3 numbers to calculate!`);
+    } else {
+      const recent = userData.history.slice(-5).reverse();
+      const lines = recent.map((h, i) =>
+        `${i + 1}. $${h.risk} / stop ${h.stop} / pip ${h.pip} → *${h.lotsUsed} lots* ($${h.actualRisk})`
+      ).join('\n');
+      await sendMessage(TOKEN, chatId, `📋 *Last ${recent.length} Calculations*\n\n${lines}`);
+    }
+    return { statusCode: 200, body: 'OK' };
+  }
+
+  if (text.startsWith('/setrisk ')) {
+    const amount = parseFloat(text.slice(9));
+    if (isNaN(amount) || amount <= 0) {
+      await sendMessage(TOKEN, chatId, `❌ Invalid amount. Example: /setrisk 20`);
+    } else {
+      const userData = await getUserData(chatId);
+      userData.defaultRisk = amount;
+      await saveUserData(chatId, userData);
+      await sendMessage(TOKEN, chatId, `✅ Default risk set to $${amount}`);
+    }
+    return { statusCode: 200, body: 'OK' };
+  }
+
+  if (text.startsWith('/setbudget ')) {
+    const amount = parseFloat(text.slice(11));
+    if (isNaN(amount) || amount <= 0) {
+      await sendMessage(TOKEN, chatId, `❌ Invalid amount. Example: /setbudget 60`);
+    } else {
+      const userData = await getUserData(chatId);
+      userData.dailyBudget = amount;
+      await saveUserData(chatId, userData);
+      await sendMessage(TOKEN, chatId, `✅ Daily budget set to $${amount}`);
+    }
     return { statusCode: 200, body: 'OK' };
   }
 
@@ -119,8 +182,22 @@ exports.handler = async (event) => {
     const lotsRounded = Math.floor(lots);
     const actualRisk = lotsRounded * stop * pip;
 
+    const userData = await getUserData(chatId);
+    userData.history.push({
+      risk,
+      stop,
+      pip,
+      lots: parseFloat(lots.toFixed(2)),
+      lotsUsed: lotsRounded,
+      actualRisk: parseFloat(actualRisk.toFixed(2))
+    });
+    if (userData.history.length > 20) {
+      userData.history = userData.history.slice(-20);
+    }
+    await saveUserData(chatId, userData);
+
     await sendMessage(TOKEN, chatId,
-      `🧮 *Result*\n\nRisk: $${risk}\nStop: ${stop} pts\nPip value: $${pip}\n\nExact lots: ${lots.toFixed(2)}\n→ Use: *${lotsRounded} lots*\n\nActual risk: $${actualRisk.toFixed(2)}\n${actualRisk <= 20 ? '✅ Within $20 limit' : '⚠️ Exceeds $20 limit'}\n\nTarget profit (1:2 RR): $${(actualRisk * 2).toFixed(2)}\n\n_Educational only. Not financial advice._`
+      `🧮 *Result*\n\nRisk: $${risk}\nStop: ${stop} pts\nPip value: $${pip}\n\nExact lots: ${lots.toFixed(2)}\n→ Use: *${lotsRounded} lots*\n\nActual risk: $${actualRisk.toFixed(2)}\n${actualRisk <= userData.defaultRisk ? '✅ Within limit' : '⚠️ Over limit'}\n\nTarget profit (1:2 RR): $${(actualRisk * 2).toFixed(2)}\n\n_Educational only. Not financial advice._`
     );
     return { statusCode: 200, body: 'OK' };
   }
